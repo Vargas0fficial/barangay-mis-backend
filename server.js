@@ -11,9 +11,9 @@ const PORT = process.env.PORT || 5000;
 
 // 📁 PERMANENT RENDER STORAGE PATH:
 // Kapag nasa Render, gagamitin nito ang '/data/database.json' para hindi mabura ang data mo kahit mag-restart ang server.
-const DB_FILE = process.env.RENDER
-  ? path.join("/data", "database.json")
-  : path.join(__dirname, "database.json");
+// 📁 RENDER FREE TIER STORAGE PATH:
+// Gagamitin natin ang kasalukuyang directory para iwas permission error
+const DB_FILE = path.join(__dirname, "database.json");
 
 // Core Structural Middleware Configurations
 app.use(cors());
