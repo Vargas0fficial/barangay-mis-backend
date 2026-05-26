@@ -1,0 +1,34 @@
+{
+  "users": [
+    {
+      "userId": "ACC-001",
+      "fullName": "System Administrator",
+      "username": "admin",
+      "role": "Admin",
+      "status": "Active",
+      "passwordPreview": "123"
+    }
+  ],
+  "officials": [
+    {
+      "name": "Kenneth Fernandez",
+      "position": "Barangay Kagawad",
+      "termStart": "2026-05-21",
+      "termEnd": "2026-05-21",
+      "contact": "asASasA",
+      "active": "Active"
+    }
+  ],
+  "fourPs": [],
+  "blotter": [
+    {
+      "caseId": "BLTR-2026-001",
+      "complainant": "mark vargas",
+      "respondent": "mang aking ",
+      "type": "Property Damage",
+      "date": "2026-05-23",
+      "status": "Active",
+      "details": "nagsusunog kahit dis oras na ng gabi"
+    }
+  ]
+}
