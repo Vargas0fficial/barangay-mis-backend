@@ -1,17 +1,31 @@
+// backend/server.js
 const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 
 const app = express();
-const PORT = 5000;
-const DB_FILE = path.join(__dirname, "database.json");
+
+// 🚀 CLOUD PORT SELECTION: Ginawa nating dynamic para kay Render, default sa 5000 kung local dev.
+const PORT = process.env.PORT || 5000;
+
+// 📁 PERMANENT RENDER STORAGE PATH:
+// Kapag nasa Render, gagamitin nito ang '/data/database.json' para hindi mabura ang data mo kahit mag-restart ang server.
+const DB_FILE = process.env.RENDER
+  ? path.join("/data", "database.json")
+  : path.join(__dirname, "database.json");
 
 // Core Structural Middleware Configurations
 app.use(cors());
 app.use(express.json());
 
 // ⚙️ INITIALIZATION LOGIC: Production Clean Slate with Locked Master Admin Key
+// Siguraduhing may access sa folder bago gumawa ng file (Para sa Render Persistent Disk)
+const dbDir = path.dirname(DB_FILE);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
 if (!fs.existsSync(DB_FILE)) {
   const cleanSchema = {
     // Tanging ang master admin account lang ang pre-configured para may pang-login ka, gar!
