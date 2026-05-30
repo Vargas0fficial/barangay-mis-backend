@@ -1,112 +1,119 @@
-// backend/server.js
+require("dotenv").config();
 const express = require("express");
+const mongoose = require("mongoose");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 
 const app = express();
-
-// 🚀 CLOUD PORT SELECTION: Ginawa nating dynamic para kay Render, default sa 5000 kung local dev.
 const PORT = process.env.PORT || 5000;
-
-// 📁 PERMANENT RENDER STORAGE PATH:
-// Kapag nasa Render, gagamitin nito ang '/data/database.json' para hindi mabura ang data mo kahit mag-restart ang server.
-// 📁 RENDER FREE TIER STORAGE PATH:
-// Gagamitin natin ang kasalukuyang directory para iwas permission error
 const DB_FILE = path.join(__dirname, "database.json");
 
-// Core Structural Middleware Configurations
 app.use(cors());
 app.use(express.json());
 
-// ⚙️ INITIALIZATION LOGIC: Production Clean Slate with Locked Master Admin Key
-// Siguraduhing may access sa folder bago gumawa ng file (Para sa Render Persistent Disk)
-const dbDir = path.dirname(DB_FILE);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+// 🛢️ MONGODB CONNECTION — same database ng Barangay MIS
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => console.log("✅ Connected to Barangay MIS MongoDB Atlas."))
+  .catch((err) => console.error("❌ MongoDB connection error:", err));
 
+// ⚙️ JSON FILE INITIALIZATION (para sa officials, blotter, 4ps, accounts)
+const dbDir = path.dirname(DB_FILE);
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 if (!fs.existsSync(DB_FILE)) {
   const cleanSchema = {
-    // Tanging ang master admin account lang ang pre-configured para may pang-login ka, gar!
-    users: [
-      { 
-        userId: "ACC-001", 
-        fullName: "System Administrator", 
-        username: "admin", 
-        role: "Admin", 
-        status: "Active", 
-        passwordPreview: "admin123" 
-      }
-    ],
-    // Lahat ng operational registries ay ginawa nating blangko para mano-mano ang encoding
+    users: [{ userId: "ACC-001", fullName: "System Administrator", username: "admin", role: "Admin", status: "Active", passwordPreview: "admin123" }],
     officials: [],
     fourPs: [],
     blotter: [],
-    residents: [] // Naka-ready na rin sakaling may hiwalay kang data layer para sa residents
   };
   fs.writeFileSync(DB_FILE, JSON.stringify(cleanSchema, null, 2), "utf8");
 }
 
-// Helper Routine: Read Unified Data Object From Disk
-const readDatabase = () => {
-  const fileData = fs.readFileSync(DB_FILE, "utf8");
-  return JSON.parse(fileData);
-};
-
-// Helper Routine: Persist Unified Data Object Back to Disk Storage
-const writeDatabase = (data) => {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
-};
+const readDatabase = () => JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
+const writeDatabase = (data) => fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
 
 
 // ==========================================
-// 🔐 ROUTE ROUTINE Layer 1: Access Authentication Core (UNIVERSAL BYPASS ENABLED)
+// 🔐 LAYER 1: AUTHENTICATION
 // ==========================================
-app.post("/api/auth/login", (req, res) => {
-  const { username, password, role } = req.body;
-  
-  console.log("[LOGIN ATTEMPT]:", { username, password, role });
+app.post("/api/auth/login", async (req, res) => {
+  const { username, password } = req.body;
+  const inputId = (username || "").trim();
+  const inputPass = (password || "").toString().trim().toLowerCase();
 
-  // Master Token Validation Check: Papasukin ka nito kahit anong role ang i-select mo
-  if (username === "admin" && password === "admin123") {
+  console.log("[LOGIN ATTEMPT] ID:", inputId);
+
+  // 1. ADMIN BYPASS (mula sa database.json)
+  if (inputId === "admin" && password === "admin123") {
     return res.status(200).json({
-      message: "Universal bypass authentication handshake cleared successfully.",
-      user: {
-        fullName: "System Administrator Master",
-        username: "admin",
-        role: role || "Admin"
-      }
+      success: true,
+      user: { fullName: "System Administrator", username: "admin", role: "Admin", purok: "Executive Office" }
     });
   }
 
-  // Database Fallback Authentication Scan
+  // 2. JSON FILE USERS (secretary, etc.)
   try {
     const db = readDatabase();
-    const authenticatedUser = db.users.find(
-      (u) => u.username === username && u.passwordPreview === password
+    const localUser = db.users.find(
+      (u) => u.username === inputId && u.passwordPreview === password
     );
-
-    if (authenticatedUser) {
+    if (localUser) {
       return res.status(200).json({
-        message: "Database authentication cleared successfully.",
-        user: {
-          fullName: authenticatedUser.fullName,
-          username: authenticatedUser.username,
-          role: authenticatedUser.role
-        }
+        success: true,
+        user: { fullName: localUser.fullName, username: localUser.username, role: localUser.role, purok: "Executive Office" }
       });
     }
   } catch (err) {
-    console.error("Database reading execution warning:", err);
+    console.error("JSON DB read error:", err);
   }
 
-  return res.status(401).json({ error: "Invalid operational identity credentials provided." });
+  // 3. ✅ RESIDENT LOGIN — kukunin mula sa MongoDB ng Barangay MIS
+  try {
+    const db = mongoose.connection.db;
+    
+    // Case-insensitive search sa residentId
+    const resident = await db.collection("residents").findOne({
+      residentId: { $regex: new RegExp(`^${inputId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}$`, "i") }
+    });
+
+    if (!resident) {
+      return res.status(404).json({ success: false, message: "Resident ID not found. Please contact the Barangay." });
+    }
+
+    const dbPass = (resident.password || "").toString().trim().toLowerCase();
+
+    console.log("[RESIDENT LOGIN] Found:", resident.residentId);
+    console.log("[RESIDENT LOGIN] DB Pass:", dbPass, "| Input Pass:", inputPass);
+
+    if (!dbPass) {
+      return res.status(401).json({ success: false, message: "No password set for this account. Please contact the Barangay." });
+    }
+
+    if (dbPass !== inputPass) {
+      return res.status(401).json({ success: false, message: "Incorrect password. Please try again." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      user: {
+        residentId: resident.residentId,
+        fullName: resident.fullName || `${resident.firstName} ${resident.lastName}`,
+        role: resident.role || "Resident",
+        purok: resident.zoneAssignment || resident.purok || "Zone I"
+      }
+    });
+
+  } catch (err) {
+    console.error("MongoDB resident lookup error:", err);
+    return res.status(500).json({ success: false, message: "Authentication engine crash.", error: err.message });
+  }
 });
 
 
 // ==========================================
-// 👔 ROUTE ROUTINE Layer 2: Barangay Officials Registry
+// 👔 LAYER 2: OFFICIALS
 // ==========================================
 app.get("/api/officials", (req, res) => {
   const db = readDatabase();
@@ -116,26 +123,16 @@ app.get("/api/officials", (req, res) => {
 app.post("/api/officials", (req, res) => {
   const { fullName, position, termStart, termEnd, contactNumber, status } = req.body;
   const db = readDatabase();
-
-  const mappedOfficial = {
-    name: fullName,
-    position,
-    termStart,
-    termEnd,
-    contact: contactNumber,
-    active: status
-  };
-
+  const mappedOfficial = { name: fullName, position, termStart, termEnd, contact: contactNumber, active: status };
   if (!db.officials) db.officials = [];
   db.officials.push(mappedOfficial);
   writeDatabase(db);
-
   res.status(201).json({ message: "Official profile appended successfully.", record: mappedOfficial });
 });
 
 
 // ==========================================
-// 🏅 ROUTE ROUTINE Layer 3: 4Ps Social Welfare Matrix
+// 🏅 LAYER 3: 4PS
 // ==========================================
 app.get("/api/four-ps", (req, res) => {
   const db = readDatabase();
@@ -145,27 +142,21 @@ app.get("/api/four-ps", (req, res) => {
 app.post("/api/four-ps", (req, res) => {
   const { fourPsId, householdHead, address, purok, status, remarks, registeredDate } = req.body;
   const db = readDatabase();
-
   const formattedAddress = `${purok.replace("urok ", "-")} ${address}`;
   const mappedHousehold = {
-    id: fourPsId,
-    head: householdHead,
-    address: formattedAddress,
-    status,
-    remarks: remarks || "Active Enrollment Index",
+    id: fourPsId, head: householdHead, address: formattedAddress,
+    status, remarks: remarks || "Active Enrollment Index",
     registeredDate: registeredDate || new Date().toISOString().split("T")[0]
   };
-
   if (!db.fourPs) db.fourPs = [];
   db.fourPs.push(mappedHousehold);
   writeDatabase(db);
-
   res.status(201).json({ message: "Household matrix linked successfully.", record: mappedHousehold });
 });
 
 
 // ==========================================
-// ⚖️ ROUTE ROUTINE Layer 4: Peace & Order Blotter Module
+// ⚖️ LAYER 4: BLOTTER
 // ==========================================
 app.get("/api/blotter", (req, res) => {
   const db = readDatabase();
@@ -175,72 +166,44 @@ app.get("/api/blotter", (req, res) => {
 app.post("/api/blotter", (req, res) => {
   const { complainantName, respondentName, incidentType, incidentDate, incidentDetails, caseStatus } = req.body;
   const db = readDatabase();
-
   if (!db.blotter) db.blotter = [];
   const generatedCaseId = `BLTR-2026-00${db.blotter.length + 1}`;
   const mappedCase = {
-    caseId: generatedCaseId,
-    complainant: complainantName,
-    respondent: respondentName,
-    type: incidentType,
-    date: incidentDate || new Date().toISOString().split("T")[0],
-    status: caseStatus,
-    details: incidentDetails
+    caseId: generatedCaseId, complainant: complainantName, respondent: respondentName,
+    type: incidentType, date: incidentDate || new Date().toISOString().split("T")[0],
+    status: caseStatus, details: incidentDetails
   };
-
   db.blotter.push(mappedCase);
   writeDatabase(db);
-
   res.status(201).json({ message: "Incident record logged permanently.", record: mappedCase });
 });
 
-// 📝 UPDATED ROUTINE: Edit/Update existing blotter case configuration by ID
 app.put("/api/blotter/:id", (req, res) => {
   const { id } = req.params;
   const { complainantName, respondentName, incidentType, incidentDate, incidentDetails, caseStatus } = req.body;
   const db = readDatabase();
-
   if (!db.blotter) db.blotter = [];
   const caseIndex = db.blotter.findIndex((item) => item.caseId === id);
-
-  if (caseIndex === -1) {
-    return res.status(404).json({ error: "Blotter record sequence not found inside localized cluster." });
-  }
-
-  db.blotter[caseIndex] = {
-    ...db.blotter[caseIndex],
-    complainant: complainantName,
-    respondent: respondentName,
-    type: incidentType,
-    date: incidentDate,
-    status: caseStatus,
-    details: incidentDetails
-  };
-
+  if (caseIndex === -1) return res.status(404).json({ error: "Blotter record not found." });
+  db.blotter[caseIndex] = { ...db.blotter[caseIndex], complainant: complainantName, respondent: respondentName, type: incidentType, date: incidentDate, status: caseStatus, details: incidentDetails };
   writeDatabase(db);
-  res.status(200).json({ message: "Incident log updated permanently.", record: db.blotter[caseIndex] });
+  res.status(200).json({ message: "Incident log updated.", record: db.blotter[caseIndex] });
 });
 
-// 🗑️ UPDATED ROUTINE: Safely purge a specific blotter logging track by ID
 app.delete("/api/blotter/:id", (req, res) => {
   const { id } = req.params;
   const db = readDatabase();
-
   if (!db.blotter) db.blotter = [];
   const initialCount = db.blotter.length;
   db.blotter = db.blotter.filter((item) => item.caseId !== id);
-
-  if (db.blotter.length === initialCount) {
-    return res.status(404).json({ error: "Record sequence target not found." });
-  }
-
+  if (db.blotter.length === initialCount) return res.status(404).json({ error: "Record not found." });
   writeDatabase(db);
-  res.status(200).json({ message: "Blotter record safely purged from storage logs." });
+  res.status(200).json({ message: "Blotter record purged successfully." });
 });
 
 
 // ==========================================
-// 🔐 ROUTE ROUTINE Layer 5: Identity Access Credentials Control
+// 🔐 LAYER 5: ACCOUNTS
 // ==========================================
 app.get("/api/accounts", (req, res) => {
   const db = readDatabase();
@@ -250,51 +213,33 @@ app.get("/api/accounts", (req, res) => {
 app.post("/api/accounts", (req, res) => {
   const { fullName, username, password, role, status } = req.body;
   const db = readDatabase();
-
   if (!db.users) db.users = [];
   const generatedAccountId = `ACC-00${db.users.length + 1}`;
-  const mappedAccount = {
-    userId: generatedAccountId,
-    fullName,
-    username,
-    role,
-    status,
-    passwordPreview: password
-  };
-
+  const mappedAccount = { userId: generatedAccountId, fullName, username, role, status, passwordPreview: password };
   db.users.push(mappedAccount);
   writeDatabase(db);
-
-  res.status(201).json({ message: "Security user profile provisioned successfully.", record: mappedAccount });
+  res.status(201).json({ message: "User profile provisioned.", record: mappedAccount });
 });
 
-
-// ==========================================
-// 🗑️ SECURITY DE-PROVISIONING: Delete User Profile
-// ==========================================
 app.delete("/api/accounts/:id", (req, res) => {
   const { id } = req.params;
   const db = readDatabase();
-
   if (!db.users) db.users = [];
   const initialCount = db.users.length;
   db.users = db.users.filter((user) => user.userId !== id);
-
-  if (db.users.length === initialCount) {
-    return res.status(404).json({ error: "User record index sequence not found inside cluster logs." });
-  }
-
+  if (db.users.length === initialCount) return res.status(404).json({ error: "User not found." });
   writeDatabase(db);
-  res.status(200).json({ message: "Security user clearance index dropped successfully from database tracks." });
+  res.status(200).json({ message: "User profile deleted." });
 });
 
 
 // ==========================================
-// 🚀 SERVER BOOT TRIGGER
+// 🚀 SERVER BOOT
 // ==========================================
 app.listen(PORT, () => {
   console.log(`===================================================`);
-  console.log(`[SERVER INITIATED] Running smoothly on port: ${PORT}`);
-  console.log(`[DATA CHANNEL] Unified localized storage stream bound to JSON file.`);
+  console.log(`[SERVER] Running on port: ${PORT}`);
+  console.log(`[STORAGE] JSON file: ${DB_FILE}`);
+  console.log(`[DATABASE] MongoDB: Barangay MIS Atlas`);
   console.log(`===================================================`);
 });
